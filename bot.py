@@ -2,8 +2,23 @@ import sqlite3
 import requests
 import time
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
+import os
 
 DB_FILE = "stores_database.db"
+
+# سيرفر مصغر باش Render ما يطفيس السكربت ويعتبره شغال
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running successfully!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+    server.serve_forever()
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -35,10 +50,8 @@ def fetch_shopify_stores():
     return []
 
 def filter_and_save_stores(stores):
-    allowed_countries = ["US", "CA", "UK", "AU", "EU"]
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    
     added_count = 0
     for store in stores:
         url = store.get("url")
@@ -48,7 +61,6 @@ def filter_and_save_stores(stores):
         name = store.get("name", "Store")
         
         contact_url = f"{url.rstrip('/')}/pages/contact"
-        
         if not url:
             continue
             
@@ -111,36 +123,42 @@ def submit_contact_form(contact_url, sender_email, store_name, message):
         return False, str(e)
 
 def run_automation_engine():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, store_name, contact_url, email, niche FROM stores WHERE status = 'PENDING'")
-    pending_stores = cursor.fetchall()
-    
-    sender_email = "support@ugc-gen-ai.carrd.co"
-    
-    for store_id, store_name, contact_url, store_email, niche in pending_stores:
-        message = generate_contact_message(store_name, niche)
-        
-        success, reason = submit_contact_form(contact_url, sender_email, store_name, message)
-        
-        if success:
-            cursor.execute("UPDATE stores SET status = 'SENT' WHERE id = ?", (store_id,))
-            conn.commit()
-            print(f"Contact form submitted successfully for: {store_name} -> {contact_url}")
-        else:
-            status_label = 'SKIPPED_PROTECTED' if 'Protected' in reason else 'FAILED'
-            cursor.execute("UPDATE stores SET status = ? WHERE id = ?", (status_label, store_id,))
-            conn.commit()
-            print(f"Skipped/Failed for {store_name} ({reason}), moving to next store instantly.")
+    init_db()
+    while True:
+        raw_stores = fetch_shopify_stores()
+        if raw_stores:
+            filter_and_save_stores(raw_stores)
             
-        time.sleep(0.5)
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, store_name, contact_url, email, niche FROM stores WHERE status = 'PENDING'")
+        pending_stores = cursor.fetchall()
         
-    conn.close()
+        sender_email = "support@ugc-gen-ai.carrd.co"
+        
+        for store_id, store_name, contact_url, store_email, niche in pending_stores:
+            message = generate_contact_message(store_name, niche)
+            success, reason = submit_contact_form(contact_url, sender_email, store_name, message)
+            
+            if success:
+                cursor.execute("UPDATE stores SET status = 'SENT' WHERE id = ?", (store_id,))
+                conn.commit()
+                print(f"Sent: {store_name}")
+            else:
+                status_label = 'SKIPPED_PROTECTED' if 'Protected' in reason else 'FAILED'
+                cursor.execute("UPDATE stores SET status = ? WHERE id = ?", (status_label, store_id,))
+                conn.commit()
+                
+            time.sleep(0.5)
+            
+        conn.close()
+        time.sleep(60) # الإنتظار دقيقة قبل جلب دفعة جديدة
 
 if __name__ == "__main__":
-    init_db()
-    raw_stores = fetch_shopify_stores()
-    if raw_stores:
-        filter_and_save_stores(raw_stores)
+    # تشغيل سيرفر الويب في خلفية الكود باش Render يبقى راضي وما يطفيهوش
+    server_thread = threading.Thread(target=run_web_server)
+    server_thread.daemon = True
+    server_thread.start()
+    
+    # تشغيل بوت الإرسال
     run_automation_engine()
-
