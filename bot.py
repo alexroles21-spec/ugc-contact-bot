@@ -5,10 +5,10 @@ from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 import os
+import urllib.parse
 
 DB_FILE = "stores_database.db"
 
-# متغيرات لمراقبة الإحصائيات في الصفحة الحية
 stats = {
     "total_sent": 0,
     "total_failed": 0,
@@ -16,7 +16,6 @@ stats = {
     "status": "Running"
 }
 
-# صفحة مراقبة حية على الرابط باش تشوف النتيجة بعينك
 class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -27,7 +26,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         <!DOCTYPE html>
         <html>
         <head>
-            <title>UGC Bot Live Dashboard</title>
+            <title>UGC Bot Live Monitor</title>
             <meta http-equiv="refresh" content="5">
             <style>
                 body {{ font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; text-align: center; padding: 50px; }}
@@ -77,14 +76,31 @@ def init_db():
     conn.close()
 
 def fetch_shopify_stores():
-    proxy_api = "https://smart-proxy-server.onrender.com/api?key"
-    try:
-        response = requests.get(proxy_api, timeout=30)
-        if response.status_code == 200:
-            return response.json()
-    except Exception as e:
-        print(f"Proxy Connection Error: {e}")
-    return []
+    # النيشات والدول المحددة بدقة
+    niches = ["إلكترونيات", "ملابس نسائية ورجالية", "اكسسوارات", "تجميل", "أدوات المنازل"]
+    countries = ["أمريكا", "كندا", "أستراليا", "أوروبا", "لندن"]
+    
+    proxy_base = "http://smart-proxy-server.onrender.com/proxy?key=proxy_41660a34c997820e3341be419e270edd&url="
+    
+    all_fetched_stores = []
+    
+    for niche in niches:
+        for country in countries:
+            query_target = f"stores?niche={urllib.parse.quote(niche)}&country={urllib.parse.quote(country)}"
+            proxy_url = proxy_base + query_target
+            
+            try:
+                response = requests.get(proxy_url, timeout=15)
+                if response.status_code == 200:
+                    data = response.json()
+                    if isinstance(data, list):
+                        all_fetched_stores.extend(data)
+                    elif isinstance(data, dict) and "stores" in data:
+                        all_fetched_stores.extend(data["stores"])
+            except Exception as e:
+                pass
+                
+    return all_fetched_stores
 
 def filter_and_save_stores(stores):
     conn = sqlite3.connect(DB_FILE)
@@ -92,14 +108,15 @@ def filter_and_save_stores(stores):
     added_count = 0
     for store in stores:
         url = store.get("url")
-        email = store.get("email")
-        niche = store.get("niche", "general").lower()
-        country = store.get("country", "").upper()
+        email = store.get("email", "")
+        niche = store.get("niche", "general")
+        country = store.get("country", "US")
         name = store.get("name", "Store")
         
-        contact_url = f"{url.rstrip('/')}/pages/contact"
         if not url:
             continue
+            
+        contact_url = f"{url.rstrip('/')}/pages/contact"
             
         try:
             cursor.execute('''
@@ -163,7 +180,7 @@ def run_automation_engine():
     global stats
     init_db()
     while True:
-        stats["status"] = "Fetching stores..."
+        stats["status"] = "Fetching stores by niches & countries..."
         raw_stores = fetch_shopify_stores()
         if raw_stores:
             filter_and_save_stores(raw_stores)
