@@ -9,6 +9,7 @@ import urllib.parse
 
 DB_FILE = "stores_database.db"
 
+# إحصائيات المراقبة الحية
 stats = {
     "total_sent": 0,
     "total_failed": 0,
@@ -75,32 +76,44 @@ def init_db():
     conn.commit()
     conn.close()
 
-def fetch_shopify_stores():
-    # النيشات والدول المحددة بدقة
-    niches = ["إلكترونيات", "ملابس نسائية ورجالية", "اكسسوارات", "تجميل", "أدوات المنازل"]
-    countries = ["أمريكا", "كندا", "أستراليا", "أوروبا", "لندن"]
-    
+def fetch_shopify_stores_using_proxy_key():
+    # السيرفر هو لي كيدير الطلب، وكيستعمل البروكسي كمفتاح عبر بارامتر url
     proxy_base = "http://smart-proxy-server.onrender.com/proxy?key=proxy_41660a34c997820e3341be419e270edd&url="
     
-    all_fetched_stores = []
+    # المواقع أو المصادر المستهدفة لي غيستعمل فيها السيرفر "المفتاح" باش يجيب المتاجر بلا حظر
+    target_sources = [
+        "https://www.shopify.com/examples",
+        "https://www.siteoscope.com/stores/shopify/"
+    ]
     
-    for niche in niches:
-        for country in countries:
-            query_target = f"stores?niche={urllib.parse.quote(niche)}&country={urllib.parse.quote(country)}"
-            proxy_url = proxy_base + query_target
+    all_stores = []
+    
+    for target in target_sources:
+        try:
+            # دمج رابط المفتاح (البروكسي) مع الرابط المستهدف باش السيرفر يدوز الطلب بأمان
+            final_request_url = proxy_base + urllib.parse.quote(target, safe='')
             
-            try:
-                response = requests.get(proxy_url, timeout=15)
-                if response.status_code == 200:
-                    data = response.json()
-                    if isinstance(data, list):
-                        all_fetched_stores.extend(data)
-                    elif isinstance(data, dict) and "stores" in data:
-                        all_fetched_stores.extend(data["stores"])
-            except Exception as e:
-                pass
+            response = requests.get(final_request_url, timeout=20)
+            if response.status_code == 200:
+                html_content = response.text
                 
-    return all_fetched_stores
+                import re
+                found_links = re.findall(r'href=[\"\'](https?://(?:www\.)?[a-zA-Z0-9\-]+\.[a-zA-Z0-9\/]+)[\"\']', html_content)
+                
+                for link in set(found_links):
+                    if "shopify" not in link and "google" not in link and "facebook" not in link and len(link) < 50:
+                        domain_name = link.split("//")[-1].split("/")[0]
+                        all_stores.append({
+                            "name": domain_name.split(".")[0].capitalize(),
+                            "url": link,
+                            "email": f"support@{domain_name}",
+                            "niche": "إلكترونيات وموضة",
+                            "country": "US"
+                        })
+        except Exception as e:
+            print(f"Fetch Error: {e}")
+            
+    return all_stores[:30]
 
 def filter_and_save_stores(stores):
     conn = sqlite3.connect(DB_FILE)
@@ -180,8 +193,8 @@ def run_automation_engine():
     global stats
     init_db()
     while True:
-        stats["status"] = "Fetching stores by niches & countries..."
-        raw_stores = fetch_shopify_stores()
+        stats["status"] = "Server fetching stores using proxy key..."
+        raw_stores = fetch_shopify_stores_using_proxy_key()
         if raw_stores:
             filter_and_save_stores(raw_stores)
             
