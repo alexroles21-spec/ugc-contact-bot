@@ -8,16 +8,53 @@ import os
 
 DB_FILE = "stores_database.db"
 
-# سيرفر مصغر باش Render ما يطفيس السكربت ويعتبره شغال
-class SimpleHandler(BaseHTTPRequestHandler):
+# متغيرات لمراقبة الإحصائيات في الصفحة الحية
+stats = {
+    "total_sent": 0,
+    "total_failed": 0,
+    "last_store": "None",
+    "status": "Running"
+}
+
+# صفحة مراقبة حية على الرابط باش تشوف النتيجة بعينك
+class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header("Content-type", "text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(b"Bot is running successfully!")
+        
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>UGC Bot Live Dashboard</title>
+            <meta http-equiv="refresh" content="5">
+            <style>
+                body {{ font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; text-align: center; padding: 50px; }}
+                .card {{ background: #1e293b; padding: 20px; border-radius: 12px; display: inline-block; box-shadow: 0 4px 6px rgba(0,0,0,0.3); width: 350px; }}
+                h1 {{ color: #38bdf8; font-size: 22px; }}
+                p {{ font-size: 18px; margin: 10px 0; }}
+                .sent {{ color: #4ade80; font-weight: bold; }}
+                .failed {{ color: #f87171; font-weight: bold; }}
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h1>🚀 UGC Bot Live Monitor</h1>
+                <p>Status: <span class="sent">{stats['status']}</span></p>
+                <p>Total Sent: <span class="sent">{stats['total_sent']}</span></p>
+                <p>Failed / Skipped: <span class="failed">{stats['total_failed']}</span></p>
+                <p>Last Store: <br><b>{stats['last_store']}</b></p>
+                <p style="font-size: 12px; color: #94a3b8; margin-top: 20px;">Auto-refreshes every 5 seconds</p>
+            </div>
+        </body>
+        </html>
+        """
+        self.wfile.write(html.encode("utf-8"))
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+    server = HTTPServer(('0.0.0.0', port), DashboardHandler)
     server.serve_forever()
 
 def init_db():
@@ -123,8 +160,10 @@ def submit_contact_form(contact_url, sender_email, store_name, message):
         return False, str(e)
 
 def run_automation_engine():
+    global stats
     init_db()
     while True:
+        stats["status"] = "Fetching stores..."
         raw_stores = fetch_shopify_stores()
         if raw_stores:
             filter_and_save_stores(raw_stores)
@@ -136,29 +175,32 @@ def run_automation_engine():
         
         sender_email = "support@ugc-gen-ai.carrd.co"
         
+        stats["status"] = "Sending messages..."
         for store_id, store_name, contact_url, store_email, niche in pending_stores:
             message = generate_contact_message(store_name, niche)
             success, reason = submit_contact_form(contact_url, sender_email, store_name, message)
             
+            stats["last_store"] = store_name
             if success:
                 cursor.execute("UPDATE stores SET status = 'SENT' WHERE id = ?", (store_id,))
                 conn.commit()
+                stats["total_sent"] += 1
                 print(f"Sent: {store_name}")
             else:
                 status_label = 'SKIPPED_PROTECTED' if 'Protected' in reason else 'FAILED'
                 cursor.execute("UPDATE stores SET status = ? WHERE id = ?", (status_label, store_id,))
                 conn.commit()
+                stats["total_failed"] += 1
                 
             time.sleep(0.5)
             
         conn.close()
-        time.sleep(60) # الإنتظار دقيقة قبل جلب دفعة جديدة
+        stats["status"] = "Waiting for new batch..."
+        time.sleep(60)
 
 if __name__ == "__main__":
-    # تشغيل سيرفر الويب في خلفية الكود باش Render يبقى راضي وما يطفيهوش
     server_thread = threading.Thread(target=run_web_server)
     server_thread.daemon = True
     server_thread.start()
     
-    # تشغيل بوت الإرسال
     run_automation_engine()
