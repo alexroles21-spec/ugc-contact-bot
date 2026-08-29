@@ -5,11 +5,9 @@ from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 import os
-import urllib.parse
 
 DB_FILE = "stores_database.db"
 
-# إحصائيات المراقبة الحية
 stats = {
     "total_sent": 0,
     "total_failed": 0,
@@ -76,44 +74,20 @@ def init_db():
     conn.commit()
     conn.close()
 
-def fetch_shopify_stores_using_proxy_key():
-    # السيرفر هو لي كيدير الطلب، وكيستعمل البروكسي كمفتاح عبر بارامتر url
-    proxy_base = "http://smart-proxy-server.onrender.com/proxy?key=proxy_41660a34c997820e3341be419e270edd&url="
-    
-    # المواقع أو المصادر المستهدفة لي غيستعمل فيها السيرفر "المفتاح" باش يجيب المتاجر بلا حظر
-    target_sources = [
-        "https://www.shopify.com/examples",
-        "https://www.siteoscope.com/stores/shopify/"
+def fetch_shopify_stores():
+    direct_stores = [
+        {"name": "Allbirds", "url": "https://www.allbirds.com", "niche": "Men & Women Fashion", "country": "US"},
+        {"name": "Gymshark", "url": "https://www.gymshark.com", "niche": "Men & Women Fashion", "country": "UK"},
+        {"name": "Kylie Cosmetics", "url": "https://kyliecosmetics.com", "niche": "Beauty & Cosmetics", "country": "US"},
+        {"name": "Fashion Nova", "url": "https://www.fashionnova.com", "niche": "Men & Women Fashion", "country": "US"},
+        {"name": "Master Dynamic", "url": "https://www.masterdynamic.com", "niche": "Electronics", "country": "US"},
+        {"name": "Mejuri", "url": "https://mejuri.com", "niche": "Accessories", "country": "CA"},
+        {"name": "Brooklinen", "url": "https://www.brooklinen.com", "niche": "Home & Kitchen", "country": "US"},
+        {"name": "Parachute Home", "url": "https://www.parachutehome.com", "niche": "Home & Kitchen", "country": "US"},
+        {"name": "ColourPop", "url": "https://colourpop.com", "niche": "Beauty & Cosmetics", "country": "US"},
+        {"name": "Untuckit", "url": "https://www.untuckit.com", "niche": "Men & Women Fashion", "country": "US"}
     ]
-    
-    all_stores = []
-    
-    for target in target_sources:
-        try:
-            # دمج رابط المفتاح (البروكسي) مع الرابط المستهدف باش السيرفر يدوز الطلب بأمان
-            final_request_url = proxy_base + urllib.parse.quote(target, safe='')
-            
-            response = requests.get(final_request_url, timeout=20)
-            if response.status_code == 200:
-                html_content = response.text
-                
-                import re
-                found_links = re.findall(r'href=[\"\'](https?://(?:www\.)?[a-zA-Z0-9\-]+\.[a-zA-Z0-9\/]+)[\"\']', html_content)
-                
-                for link in set(found_links):
-                    if "shopify" not in link and "google" not in link and "facebook" not in link and len(link) < 50:
-                        domain_name = link.split("//")[-1].split("/")[0]
-                        all_stores.append({
-                            "name": domain_name.split(".")[0].capitalize(),
-                            "url": link,
-                            "email": f"support@{domain_name}",
-                            "niche": "إلكترونيات وموضة",
-                            "country": "US"
-                        })
-        except Exception as e:
-            print(f"Fetch Error: {e}")
-            
-    return all_stores[:30]
+    return direct_stores
 
 def filter_and_save_stores(stores):
     conn = sqlite3.connect(DB_FILE)
@@ -121,10 +95,10 @@ def filter_and_save_stores(stores):
     added_count = 0
     for store in stores:
         url = store.get("url")
-        email = store.get("email", "")
-        niche = store.get("niche", "general")
-        country = store.get("country", "US")
         name = store.get("name", "Store")
+        niche = store.get("niche", "General")
+        country = store.get("country", "US")
+        email = f"support@{url.replace('https://', '').replace('http://', '').rstrip('/')}"
         
         if not url:
             continue
@@ -167,10 +141,6 @@ def submit_contact_form(contact_url, sender_email, store_name, message):
             "Content-Type": "application/x-www-form-urlencoded"
         }
         
-        page_check = requests.get(contact_url, headers=headers, timeout=10)
-        if page_check.status_code != 200 or "cloudflare" in page_check.text.lower() or "recaptcha" in page_check.text.lower():
-            return False, "Protected or Captcha detected"
-
         payload = {
             "form_type": "contact",
             "utf8": "✓",
@@ -192,12 +162,12 @@ def submit_contact_form(contact_url, sender_email, store_name, message):
 def run_automation_engine():
     global stats
     init_db()
+    
+    raw_stores = fetch_shopify_stores()
+    if raw_stores:
+        filter_and_save_stores(raw_stores)
+        
     while True:
-        stats["status"] = "Server fetching stores using proxy key..."
-        raw_stores = fetch_shopify_stores_using_proxy_key()
-        if raw_stores:
-            filter_and_save_stores(raw_stores)
-            
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute("SELECT id, store_name, contact_url, email, niche FROM stores WHERE status = 'PENDING'")
@@ -217,16 +187,15 @@ def run_automation_engine():
                 stats["total_sent"] += 1
                 print(f"Sent: {store_name}")
             else:
-                status_label = 'SKIPPED_PROTECTED' if 'Protected' in reason else 'FAILED'
-                cursor.execute("UPDATE stores SET status = ? WHERE id = ?", (status_label, store_id,))
+                cursor.execute("UPDATE stores SET status = 'FAILED' WHERE id = ?", (store_id,))
                 conn.commit()
                 stats["total_failed"] += 1
                 
-            time.sleep(0.5)
+            time.sleep(2)
             
         conn.close()
-        stats["status"] = "Waiting for new batch..."
-        time.sleep(60)
+        stats["status"] = "Waiting / Batch loop..."
+        time.sleep(30)
 
 if __name__ == "__main__":
     server_thread = threading.Thread(target=run_web_server)
